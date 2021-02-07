@@ -202,8 +202,8 @@ static void ad7150_read(AD7150State *s)
         s->buf[s->len ++] = s->timeout_or_thresh_low[0];
         /* Fallthrough */
     case AD7150_CH1_SETUP_REG:
-        /*TODO */
-        s->buf[s->len ++] = 0x00;//todo
+        /* TODO */
+        s->buf[s->len ++] = 0x00;
         /* Fallthrough */
     case AD7150_CH2_SENS_TH_HIGH_REG:
         s->buf[s->len ++] = s->sensitivity_or_thresh_high[1];
@@ -225,7 +225,7 @@ static void ad7150_read(AD7150State *s)
         /* Fallthrough */
     case AD7150_CH2_CAPDAC_REG:
         s->buf[s->len ++] = 0x00;//todo
-        /* Fallthrough */;
+        /* Fallthrough */
     case AD7150_SERIAL_3_REG:
         s->buf[s->len ++] = 0x00;//todo
         /* Fallthrough */
