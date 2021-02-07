@@ -40,6 +40,7 @@
 #include "hw/arm/boot.h"
 #include "hw/arm/primecell.h"
 #include "hw/arm/virt.h"
+#include "hw/misc/ad7150.h"
 #include "hw/block/flash.h"
 #include "hw/vfio/vfio-calxeda-xgmac.h"
 #include "hw/vfio/vfio-amd-xgbe.h"
@@ -79,6 +80,8 @@
 #include "hw/virtio/virtio-iommu.h"
 #include "hw/char/pl011.h"
 #include "qemu/guest-random.h"
+#include "hw/i2c/i2c.h"
+#include "hw/i2c/arm_sbcon_i2c.h"
 
 #define DEFINE_VIRT_MACHINE_LATEST(major, minor, latest) \
     static void virt_##major##_##minor##_class_init(ObjectClass *oc, \
@@ -154,6 +157,7 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_NVDIMM_ACPI] =        { 0x09090000, NVDIMM_ACPI_IO_LEN},
     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
+    [VIRT_I2C] =                { 0x0b000000, 0x00001000 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
     [VIRT_SECURE_MEM] =         { 0x0e000000, 0x01000000 },
@@ -189,6 +193,7 @@ static const int a15irqmap[] = {
     [VIRT_GPIO] = 7,
     [VIRT_SECURE_UART] = 8,
     [VIRT_ACPI_GED] = 9,
+    [VIRT_AD7150] = 10,
     [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
     [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
@@ -820,6 +825,8 @@ static void virt_powerdown_req(Notifier *n, void *opaque)
     }
 }
 
+static qemu_irq ad7150_interrupt[2];
+static uint32_t pl061_phandle;
 static void create_gpio(const VirtMachineState *vms)
 {
     char *nodename;
@@ -833,6 +840,7 @@ static void create_gpio(const VirtMachineState *vms)
                                      qdev_get_gpio_in(vms->gic, irq));
 
     uint32_t phandle = qemu_fdt_alloc_phandle(vms->fdt);
+    pl061_phandle = phandle;
     nodename = g_strdup_printf("/pl061@%" PRIx64, base);
     qemu_fdt_add_subnode(vms->fdt, nodename);
     qemu_fdt_setprop_sized_cells(vms->fdt, nodename, "reg",
@@ -843,12 +851,17 @@ static void create_gpio(const VirtMachineState *vms)
     qemu_fdt_setprop_cells(vms->fdt, nodename, "interrupts",
                            GIC_FDT_IRQ_TYPE_SPI, irq,
                            GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+    qemu_fdt_setprop_cell(vms->fdt, nodename, "#interrupt-cells", 2);
+    qemu_fdt_setprop(vms->fdt, nodename, "interrupt-controller", NULL, 0);
     qemu_fdt_setprop_cell(vms->fdt, nodename, "clocks", vms->clock_phandle);
     qemu_fdt_setprop_string(vms->fdt, nodename, "clock-names", "apb_pclk");
     qemu_fdt_setprop_cell(vms->fdt, nodename, "phandle", phandle);
 
     gpio_key_dev = sysbus_create_simple("gpio-key", -1,
                                         qdev_get_gpio_in(pl061_dev, 3));
+
+    ad7150_interrupt[0] = qdev_get_gpio_in(pl061_dev, 4);
+    ad7150_interrupt[1] = qdev_get_gpio_in(pl061_dev, 5);
     qemu_fdt_add_subnode(vms->fdt, "/gpio-keys");
     qemu_fdt_setprop_string(vms->fdt, "/gpio-keys", "compatible", "gpio-keys");
     qemu_fdt_setprop_cell(vms->fdt, "/gpio-keys", "#size-cells", 0);
@@ -1751,7 +1764,8 @@ static void machvirt_init(MachineState *machine)
     bool has_ged = !vmc->no_ged;
     unsigned int smp_cpus = machine->smp.cpus;
     unsigned int max_cpus = machine->smp.max_cpus;
-
+    I2CBus *i2c;
+ 
     /*
      * In accelerated mode, the memory map is computed earlier in kvm_type()
      * to create a VM with the right number of IPA bits.
@@ -1991,6 +2005,37 @@ static void machvirt_init(MachineState *machine)
         vms->acpi_dev = create_acpi_ged(vms);
     } else {
         create_gpio(vms);
+    }
+    {
+        struct DeviceState  *dev;
+        struct DeviceState *ad7150;
+
+        char *nodename = g_strdup_printf("/i2c@%" PRIx64, vms->memmap[VIRT_I2C].base);
+	char *nodename2 = g_strdup_printf("/i2c@%" PRIx64 "/ad7150@%" PRIx64, vms->memmap[VIRT_I2C].base, 0x4dl);
+        printf("TEST %s\n", nodename2);
+        const char compat[] = "arm,versatile-i2c";
+	const char compat2[] = "adi,ad7150";
+        
+        dev = sysbus_create_simple(TYPE_VERSATILE_I2C, vms->memmap[VIRT_I2C].base, NULL);
+        i2c = (I2CBus *)qdev_get_child_bus(dev, "i2c");
+        ad7150 = DEVICE(i2c_slave_create_simple(i2c, TYPE_AD7150, 0x4d));
+        qdev_connect_gpio_out(ad7150, 0, ad7150_interrupt[0]);
+        qdev_connect_gpio_out(ad7150, 1, ad7150_interrupt[1]);
+
+        qemu_fdt_add_subnode(vms->fdt, nodename);
+        qemu_fdt_setprop(vms->fdt, nodename, "compatible",  compat, sizeof(compat));
+        qemu_fdt_setprop_cell(vms->fdt, nodename, "#size-cells", 0);
+        qemu_fdt_setprop_cell(vms->fdt, nodename, "#address-cells", 1);
+        qemu_fdt_setprop_sized_cells(vms->fdt, nodename, "reg",
+                                     2, vms->memmap[VIRT_I2C].base,
+                                     2, vms->memmap[VIRT_I2C].size);
+
+        qemu_fdt_add_subnode(vms->fdt, nodename2);
+        qemu_fdt_setprop_cell(vms->fdt, nodename2, "interrupt-parent", pl061_phandle);
+        qemu_fdt_setprop_cells(vms->fdt, nodename2, 
+                               "interrupts", 4, 3, 5, 3);
+        qemu_fdt_setprop(vms->fdt, nodename2, "compatible",  compat2, sizeof(compat2));
+        qemu_fdt_setprop_sized_cells(vms->fdt, nodename2, "reg", 1, 0x4d);
     }
 
      /* connect powerdown request */
