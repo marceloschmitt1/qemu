@@ -82,6 +82,7 @@
 #include "qemu/guest-random.h"
 #include "hw/i2c/i2c.h"
 #include "hw/i2c/arm_sbcon_i2c.h"
+#include "hw/ssi/pl022.h"
 
 #define DEFINE_VIRT_MACHINE_LATEST(major, minor, latest) \
     static void virt_##major##_##minor##_class_init(ObjectClass *oc, \
@@ -159,6 +160,7 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
     [VIRT_I2C] =                { 0x0b000000, 0x00001000 },
+    [VIRT_SPI] = 		{ 0x0b100000, 0x00001000 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
     [VIRT_SECURE_MEM] =         { 0x0e000000, 0x01000000 },
@@ -195,6 +197,7 @@ static const int a15irqmap[] = {
     [VIRT_SECURE_UART] = 8,
     [VIRT_ACPI_GED] = 9,
     [VIRT_AD7150] = 10,
+    [VIRT_SPI] = 11,
     [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
     [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
@@ -890,6 +893,7 @@ static void create_secure_gpio_pwr(char *fdt, DeviceState *pl061_dev,
 }
 
 static qemu_irq ad7150_interrupt[2];
+static qemu_irq spi_irq;
 static uint32_t pl061_phandle;
 
 static void create_gpio_devices(const VirtMachineState *vms, int gpio,
@@ -935,6 +939,8 @@ static void create_gpio_devices(const VirtMachineState *vms, int gpio,
 
     ad7150_interrupt[0] = qdev_get_gpio_in(pl061_dev, 4);
     ad7150_interrupt[1] = qdev_get_gpio_in(pl061_dev, 5);
+
+    spi_irq = qdev_get_gpio_in(pl061_dev, 6);
 
     if (gpio != VIRT_GPIO) {
         /* Mark as not usable by the normal world */
@@ -2092,6 +2098,34 @@ static void machvirt_init(MachineState *machine)
 
     if (vms->secure && !vmc->no_secure_gpio) {
         create_gpio_devices(vms, VIRT_SECURE_GPIO, secure_sysmem);
+    }
+    {
+        //struct DeviceState *dev;
+        const char compat[] = "arm,pl022\0arm,primecell";
+	const char compat2[] = "bosch,bma220";
+        char *nodename = g_strdup_printf("/spi@%" PRIx64, vms->memmap[VIRT_SPI].base);
+        char *nodename2 = g_strdup_printf("/spi@%" PRIx64 "/accelerometer@%" PRIx64, vms->memmap[VIRT_SPI].base, 0x0l);
+        //dev =
+        sysbus_create_simple("pl022", vms->memmap[VIRT_SPI].base, qdev_get_gpio_in(vms->gic, vms->irqmap[VIRT_SPI]));
+
+        qemu_fdt_add_subnode(ms->fdt, nodename);
+
+        qemu_fdt_setprop(ms->fdt, nodename, "compatible",  compat, sizeof(compat));
+        qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg",
+                                     2, vms->memmap[VIRT_SPI].base,
+                                     2, vms->memmap[VIRT_SPI].size);
+        qemu_fdt_setprop_cell(ms->fdt, nodename, "clocks", vms->clock_phandle);
+        qemu_fdt_setprop_string(ms->fdt, nodename, "clock-names", "apb_pclk");
+        qemu_fdt_setprop_cells(ms->fdt, nodename, "interrupts",
+                           GIC_FDT_IRQ_TYPE_SPI, vms->irqmap[VIRT_SPI],
+                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+        qemu_fdt_setprop_cells(ms->fdt, nodename, "num-cs", 3);
+        //need define a chip select or this ain't going any further.
+                qemu_fdt_add_subnode(ms->fdt, nodename2);
+                qemu_fdt_setprop_cell(ms->fdt, nodename2, "interrupt-parent", pl061_phandle);
+        qemu_fdt_setprop(ms->fdt, nodename2, "compatible",  compat2, sizeof(compat2));
+        qemu_fdt_setprop_sized_cells(ms->fdt, nodename2, "reg", 1, 0x0);
+        qemu_fdt_setprop_sized_cells(ms->fdt, nodename2, "spi-max-frequency", 1, 1000000);
     }
     {
         struct DeviceState  *dev;

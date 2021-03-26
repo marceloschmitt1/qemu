@@ -72,6 +72,7 @@ enum {
     VIRT_UART,
     VIRT_MMIO,
     VIRT_I2C,
+    VIRT_SPI,
     VIRT_AD7150,
     VIRT_RTC,
     VIRT_FW_CFG,
