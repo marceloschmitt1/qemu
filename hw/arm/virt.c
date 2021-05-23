@@ -892,8 +892,8 @@ static void create_secure_gpio_pwr(char *fdt, DeviceState *pl061_dev,
                             "okay");
 }
 
-static qemu_irq ad7150_interrupt[2];
-static qemu_irq spi_irq;
+static qemu_irq ad7150_interrupt[4];
+//static qemu_irq spi_irq;
 static uint32_t pl061_phandle;
 
 static void create_gpio_devices(const VirtMachineState *vms, int gpio,
@@ -939,8 +939,10 @@ static void create_gpio_devices(const VirtMachineState *vms, int gpio,
 
     ad7150_interrupt[0] = qdev_get_gpio_in(pl061_dev, 4);
     ad7150_interrupt[1] = qdev_get_gpio_in(pl061_dev, 5);
+    ad7150_interrupt[2] = qdev_get_gpio_in(pl061_dev, 6);
+    ad7150_interrupt[3] = qdev_get_gpio_in(pl061_dev, 7);
 
-    spi_irq = qdev_get_gpio_in(pl061_dev, 6);
+//    spi_irq = qdev_get_gpio_in(pl061_dev, 8);
 
     if (gpio != VIRT_GPIO) {
         /* Mark as not usable by the normal world */
@@ -2102,12 +2104,34 @@ static void machvirt_init(MachineState *machine)
     {
         //struct DeviceState *dev;
         const char compat[] = "arm,pl022\0arm,primecell";
-	const char compat2[] = "bosch,bma220";
+	const char compat2[] = "adi,ad7124-4";
         char *nodename = g_strdup_printf("/spi@%" PRIx64, vms->memmap[VIRT_SPI].base);
-        char *nodename2 = g_strdup_printf("/spi@%" PRIx64 "/accelerometer@%" PRIx64, vms->memmap[VIRT_SPI].base, 0x0l);
+        char *nodename2 = g_strdup_printf("/spi@%" PRIx64 "/adc@%" PRIx64, vms->memmap[VIRT_SPI].base, 0x0l);
+        char *channelnodename = g_strdup_printf("/spi@%" PRIx64 "/adc@%" PRIx64 "/channel@3", vms->memmap[VIRT_SPI].base, 0x0l);
+        const char *reg_node = "/regulator@0";
+        uint32_t reg_phandle = qemu_fdt_alloc_phandle(ms->fdt);
+        uint32_t clk_phandle;
         //dev =
         sysbus_create_simple("pl022", vms->memmap[VIRT_SPI].base, qdev_get_gpio_in(vms->gic, vms->irqmap[VIRT_SPI]));
 
+
+        printf("a\n");
+        clk_phandle = qemu_fdt_alloc_phandle(ms->fdt);
+        qemu_fdt_add_subnode(ms->fdt, "/mclk");
+        qemu_fdt_setprop_string(ms->fdt, "/mclk", "compatible", "fixed-clock");
+        qemu_fdt_setprop_cell(ms->fdt, "/mclk", "#clock-cells", 0x0);
+        qemu_fdt_setprop_cell(ms->fdt, "/mclk", "clock-frequency", 24000);
+        qemu_fdt_setprop_string(ms->fdt, "/mclk", "clock-output-names",
+                                "bobsclk");
+
+        qemu_fdt_setprop_cell(ms->fdt, "/mclk", "phandle", clk_phandle);
+        qemu_fdt_add_subnode(ms->fdt, reg_node);
+        qemu_fdt_setprop(ms->fdt, reg_node, "compatible", "regulator-fixed", sizeof("regulator-fixed"));
+        qemu_fdt_setprop_cell(ms->fdt, reg_node, "reg", 0);
+        qemu_fdt_setprop_cell(ms->fdt, reg_node, "regulator-min-microvolt", 3000000);
+        qemu_fdt_setprop_cell(ms->fdt, reg_node, "regulator-max-microvolt", 3000000);
+        qemu_fdt_setprop_cell(ms->fdt, reg_node, "phandle", reg_phandle);
+        qemu_fdt_setprop_string(ms->fdt, reg_node, "regulator-name", "vcc_fun");
         qemu_fdt_add_subnode(ms->fdt, nodename);
 
         qemu_fdt_setprop(ms->fdt, nodename, "compatible",  compat, sizeof(compat));
@@ -2121,28 +2145,41 @@ static void machvirt_init(MachineState *machine)
                            GIC_FDT_IRQ_FLAGS_LEVEL_HI);
         qemu_fdt_setprop_cells(ms->fdt, nodename, "num-cs", 3);
         //need define a chip select or this ain't going any further.
-                qemu_fdt_add_subnode(ms->fdt, nodename2);
-                qemu_fdt_setprop_cell(ms->fdt, nodename2, "interrupt-parent", pl061_phandle);
+        qemu_fdt_add_subnode(ms->fdt, nodename2);
+        qemu_fdt_setprop_cell(ms->fdt, nodename2, "interrupt-parent", pl061_phandle);
         qemu_fdt_setprop(ms->fdt, nodename2, "compatible",  compat2, sizeof(compat2));
         qemu_fdt_setprop_sized_cells(ms->fdt, nodename2, "reg", 1, 0x0);
         qemu_fdt_setprop_sized_cells(ms->fdt, nodename2, "spi-max-frequency", 1, 1000000);
+        qemu_fdt_setprop_cell(ms->fdt, nodename2, "clocks", clk_phandle);
+        qemu_fdt_setprop_string(ms->fdt, nodename2, "clock-names", "mclk");
+        qemu_fdt_setprop_cell(ms->fdt, nodename2, "refin1-supply", reg_phandle);
+        qemu_fdt_setprop_cell(ms->fdt, nodename2, "interrupt-parent", pl061_phandle);
+        qemu_fdt_setprop_cells(ms->fdt, nodename2, 
+                               "interrupts", 4, 3, 5, 3);
+        qemu_fdt_add_subnode(ms->fdt, channelnodename);
+
+        qemu_fdt_setprop_sized_cells(ms->fdt, channelnodename, "reg", 1, 0x3);
+        qemu_fdt_setprop_sized_cells(ms->fdt, channelnodename, "diff-channels", 2, 6, 7);
     }
     {
         struct DeviceState  *dev;
         struct DeviceState *ad7150;
 
         char *nodename = g_strdup_printf("/i2c@%" PRIx64, vms->memmap[VIRT_I2C].base);
-	char *nodename2 = g_strdup_printf("/i2c@%" PRIx64 "/ad7150@%" PRIx64, vms->memmap[VIRT_I2C].base, 0x4dl);
+	char *nodename2 = g_strdup_printf("/i2c@%" PRIx64 "/accelerometer@%" PRIx64, vms->memmap[VIRT_I2C].base, 0x4dl);
         printf("TEST %s\n", nodename2);
         const char compat[] = "arm,versatile-i2c";
-	const char compat2[] = "adi,ad7150";
+//	const char compat2[] = "adi,ad7151";
+        const char compat2[] = "fsl,mma9551";
         
         dev = sysbus_create_simple(TYPE_VERSATILE_I2C, vms->memmap[VIRT_I2C].base, NULL);
         i2c = (I2CBus *)qdev_get_child_bus(dev, "i2c");
         ad7150 = DEVICE(i2c_slave_create_simple(i2c, TYPE_AD7150, 0x4d));
         qdev_connect_gpio_out(ad7150, 0, ad7150_interrupt[0]);
         qdev_connect_gpio_out(ad7150, 1, ad7150_interrupt[1]);
-
+        qdev_connect_gpio_out(ad7150, 2, ad7150_interrupt[2]);
+        qdev_connect_gpio_out(ad7150, 3, ad7150_interrupt[3]);
+        
         qemu_fdt_add_subnode(ms->fdt, nodename);
         qemu_fdt_setprop(ms->fdt, nodename, "compatible",  compat, sizeof(compat));
         qemu_fdt_setprop_cell(ms->fdt, nodename, "#size-cells", 0);
@@ -2154,7 +2191,7 @@ static void machvirt_init(MachineState *machine)
         qemu_fdt_add_subnode(ms->fdt, nodename2);
         qemu_fdt_setprop_cell(ms->fdt, nodename2, "interrupt-parent", pl061_phandle);
         qemu_fdt_setprop_cells(ms->fdt, nodename2, 
-                               "interrupts", 4, 3, 5, 3);
+                               "interrupts", 4, 3, 5, 3, 6, 3, 7, 3);
         qemu_fdt_setprop(ms->fdt, nodename2, "compatible",  compat2, sizeof(compat2));
         qemu_fdt_setprop_sized_cells(ms->fdt, nodename2, "reg", 1, 0x4d);
     }

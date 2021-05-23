@@ -358,6 +358,8 @@ static void ad7150_realize(DeviceState *dev, Error **errp)
 
     qdev_init_gpio_out(&i2c->qdev, &s->pin[0], 1);
     qdev_init_gpio_out(&i2c->qdev, &s->pin[1], 1);
+    qdev_init_gpio_out(&i2c->qdev, &s->pin[2], 1);
+    qdev_init_gpio_out(&i2c->qdev, &s->pin[3], 1);
 
     ad7150_reset(&s->i2c);
 }
