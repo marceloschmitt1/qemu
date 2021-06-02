@@ -330,7 +330,7 @@ static const VMStateDescription vmstate_ad7150 = {
     .post_load = ad7150_post_load,
     .fields = (VMStateField[]) {
         VMSTATE_UINT8(len, AD7150State),
-        VMSTATE_UINT8_ARRAY(buf, AD7150State, 0x18),
+        VMSTATE_UINT8_ARRAY(buf, AD7150State, 2),
         VMSTATE_UINT8(pointer, AD7150State),
         VMSTATE_I2C_SLAVE(i2c, AD7150State),
         VMSTATE_END_OF_LIST()
