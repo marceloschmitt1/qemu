@@ -18,6 +18,10 @@ config AD7150
     bool
     depends on I2C
 
+config AD7280A
+       bool
+       depends on SSI
+       
 config TMP105
     bool
     depends on I2C

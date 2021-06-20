@@ -8,6 +8,7 @@ config ARM_VIRT
     imply TPM_TIS_SYSBUS
     select ARM_GIC
     select AD7150
+    select AD7280A
     select ACPI
     select ARM_SMMUV3
     select GPIO_KEY
